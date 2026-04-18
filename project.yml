@@ -1,0 +1,29 @@
+name: VideoPlayer
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+    ENABLE_HARDENED_RUNTIME: YES
+
+targets:
+  VideoPlayer:
+    type: application
+    platform: macOS
+    sources:
+      - path: VideoPlayer
+        excludes:
+          - "**/.DS_Store"
+    settings:
+      base:
+        PRODUCT_NAME: VideoPlayer
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: VideoPlayer/Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: VideoPlayer/VideoPlayer.entitlements

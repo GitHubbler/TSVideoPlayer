@@ -1,0 +1,13 @@
+# XcodeGen
+*.xcodeproj
+*.xcworkspace
+
+# macOS
+.DS_Store
+
+# Build artifacts
+build/
+DerivedData/
+
+# User-specific
+xcuserdata/
