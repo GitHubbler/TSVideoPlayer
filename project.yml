@@ -3,20 +3,21 @@ options:
   bundleIdPrefix: com.example
   deploymentTarget:
     macOS: "14.0"
+    iOS: "17.0"
   createIntermediateGroups: true
 
 settings:
   base:
     SWIFT_VERSION: "5.9"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
-    CODE_SIGN_IDENTITY: "-"
-    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_STYLE: Automatic
     ENABLE_HARDENED_RUNTIME: YES
+    CODE_SIGNING_ALLOWED: YES
+    CODE_SIGNING_REQUIRED: NO
 
 targets:
   VideoPlayer:
     type: application
-    platform: macOS
+    supportedDestinations: [macOS, iOS]
     sources:
       - path: VideoPlayer
         excludes:
@@ -24,6 +25,10 @@ targets:
     settings:
       base:
         PRODUCT_NAME: VideoPlayer
-        GENERATE_INFOPLIST_FILE: NO
-        INFOPLIST_FILE: VideoPlayer/Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Video Player needs microphone access for voice commands (say \"play\" or \"stop\")."
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Video Player uses speech recognition to let you control playback with voice commands."
+        INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.video"
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         CODE_SIGN_ENTITLEMENTS: VideoPlayer/VideoPlayer.entitlements
