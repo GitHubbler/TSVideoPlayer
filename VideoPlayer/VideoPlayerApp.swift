@@ -77,7 +77,7 @@ class VoiceCommandManager: ObservableObject {
         #if os(iOS)
         let audioSession = AVAudioSession.sharedInstance()
         do {
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
+            try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth, .mixWithOthers])
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
             return
@@ -148,7 +148,9 @@ class VoiceCommandManager: ObservableObject {
         recognitionTask = nil
         isListening = false
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        let audioSession = AVAudioSession.sharedInstance()
+        try? audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
+        try? audioSession.setActive(true, options: .notifyOthersOnDeactivation)
         #endif
     }
 }
@@ -162,6 +164,7 @@ struct ContentView: View {
     @StateObject private var voiceManager = VoiceCommandManager()
     #if os(iOS)
     @State private var showFilePicker = false
+    @State private var activeURL: URL?
     #endif
 
     var body: some View {
@@ -217,12 +220,16 @@ struct ContentView: View {
         .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie]) { result in
             if case .success(let url) = result {
                 guard url.startAccessingSecurityScopedResource() else { return }
+                activeURL?.stopAccessingSecurityScopedResource()
+                activeURL = url
+                let audioSession = AVAudioSession.sharedInstance()
+                try? audioSession.setCategory(.playback, mode: .default, options: .mixWithOthers)
+                try? audioSession.setActive(true, options: .notifyOthersOnDeactivation)
                 let item = AVPlayerItem(url: url)
                 player.replaceCurrentItem(with: item)
                 title = url.lastPathComponent
                 player.play()
                 isPlaying = true
-                url.stopAccessingSecurityScopedResource()
             }
         }
         #endif
@@ -253,13 +260,26 @@ struct ContentView: View {
                 player.seek(to: target)
             }
         }
+        #if os(iOS)
+        .onDisappear {
+            activeURL?.stopAccessingSecurityScopedResource()
+            activeURL = nil
+        }
+        #endif
     }
 
     private func toggleVoiceControl() {
         if voiceManager.isListening {
+            let wasPlaying = isPlaying
             voiceManager.stopListening()
+            if wasPlaying {
+                player.play()
+            }
         } else {
             voiceManager.requestPermissionsAndStart()
+            if isPlaying {
+                player.play()
+            }
         }
     }
 
