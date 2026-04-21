@@ -54,6 +54,8 @@ class PlayerModel: ObservableObject {
     var activeURL: URL?
     #endif
 
+    private static let lastURLKey = "LastOpenedVideoURL"
+
     init() {
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -86,9 +88,17 @@ class PlayerModel: ObservableObject {
         try? session.setCategory(.playback, mode: .default, options: .mixWithOthers)
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
         #endif
+        UserDefaults.standard.set(url.absoluteString, forKey: Self.lastURLKey)
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         title = url.lastPathComponent
         play()
+    }
+
+    func restoreLastURL() {
+        guard let savedString = UserDefaults.standard.string(forKey: Self.lastURLKey),
+              let url = URL(string: savedString) else { return }
+        player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        title = url.lastPathComponent
     }
 
     func seek(by seconds: Double) {
@@ -122,6 +132,7 @@ class VoiceCommandManager: ObservableObject {
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var lastProcessedWordCount = 0
 
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -196,6 +207,7 @@ class VoiceCommandManager: ObservableObject {
             request.requiresOnDeviceRecognition = true
         }
         recognitionRequest = request
+        lastProcessedWordCount = 0
 
         let inputNode = audioEngine.inputNode
         let hwFormat = inputNode.outputFormat(forBus: 0)
@@ -215,16 +227,20 @@ class VoiceCommandManager: ObservableObject {
             if let result {
                 let text = result.bestTranscription.formattedString.lowercased()
                 let words = text.split(separator: " ")
-                if let last = words.last {
-                    let word = String(last)
-                    DispatchQueue.main.async {
-                        self.lastHeardWord = word
-                        switch word {
-                        case "stop", "pause": self.onStop?()
-                        case "play", "start": self.onPlay?()
-                        case "back":           self.onBack?()
-                        case "skip":           self.onSkip?()
-                        default: break
+                if words.count > self.lastProcessedWordCount {
+                    let newWords = words[self.lastProcessedWordCount...]
+                    self.lastProcessedWordCount = words.count
+                    if let last = newWords.last {
+                        let word = String(last)
+                        DispatchQueue.main.async {
+                            self.lastHeardWord = word
+                            switch word {
+                            case "stop", "pause": self.onStop?()
+                            case "play", "start": self.onPlay?()
+                            case "back":           self.onBack?()
+                            case "skip":           self.onSkip?()
+                            default: break
+                            }
                         }
                     }
                 }
@@ -357,6 +373,7 @@ struct ContentView: View {
             voiceManager.onStop  = { [weak model] in model?.pause() }
             voiceManager.onBack  = { [weak model] in model?.seek(by: -15) }
             voiceManager.onSkip  = { [weak model] in model?.seek(by:  15) }
+            model.restoreLastURL()
         }
     }
 
