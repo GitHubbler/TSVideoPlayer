@@ -198,7 +198,14 @@ class VoiceCommandManager: ObservableObject {
         recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
+        let hwFormat = inputNode.outputFormat(forBus: 0)
+        let recordingFormat: AVAudioFormat
+        if hwFormat.sampleRate > 0 && hwFormat.channelCount > 0 {
+            recordingFormat = hwFormat
+        } else {
+            guard let fallback = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1) else { return }
+            recordingFormat = fallback
+        }
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
             request.append(buffer)
         }
