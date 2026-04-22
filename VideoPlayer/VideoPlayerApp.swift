@@ -99,6 +99,8 @@ class PlayerModel: ObservableObject {
               let url = URL(string: savedString) else { return }
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         title = url.lastPathComponent
+        play()
+//        pause() (the previous file, after auto-loading, must not be playing. Commented out to match the latest "fix" by GPT.)
     }
 
     func seek(by seconds: Double) {
@@ -132,7 +134,8 @@ class VoiceCommandManager: ObservableObject {
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var lastProcessedWordCount = 0
+    private var lastProcessedWordCount = 0 // brittle because speech engines revise transcripts.
+    private var lastCommand: String? // more reliable
 
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -218,6 +221,9 @@ class VoiceCommandManager: ObservableObject {
             guard let fallback = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1) else { return }
             recordingFormat = fallback
         }
+        
+        inputNode.removeTap(onBus: 0)  // Even if you think it’s clean—AVAudioEngine is unforgiving here.
+        
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
             request.append(buffer)
         }
@@ -230,8 +236,14 @@ class VoiceCommandManager: ObservableObject {
                 if words.count > self.lastProcessedWordCount {
                     let newWords = words[self.lastProcessedWordCount...]
                     self.lastProcessedWordCount = words.count
+                            
                     if let last = newWords.last {
                         let word = String(last)
+                        
+                        // dedupe
+                        guard word != lastCommand else { return }
+                        lastCommand = word
+                        
                         DispatchQueue.main.async {
                             self.lastHeardWord = word
                             switch word {
@@ -245,11 +257,12 @@ class VoiceCommandManager: ObservableObject {
                     }
                 }
             }
-            if error != nil || result?.isFinal == true {
+            
+            //            if error != nil || result?.isFinal == true { // was tearing down and recreating the recognition pipeline every time a result is marked .isFinal.
+            if error != nil {
                 DispatchQueue.main.async {
                     self.stopListening()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        guard !self.isListening else { return }
                         self.startListening()
                     }
                 }
