@@ -229,29 +229,28 @@ class VoiceCommandManager: ObservableObject {
             guard let self else { return }
 
             if let result {
-                print("Got recognition result")
                 let text = result.bestTranscription.formattedString.lowercased()
                 print("TEXT:", text)
-                
+
                 let words = text.split(separator: " ")
                 guard let last = words.last else { return }
                 let word = String(last)
+
+                // ─────────────────────────────────────────────
+                // HARD SYNCHRONOUS GATE (no async race possible)
+                // ─────────────────────────────────────────────
                 
-                // dedupe block
-                let now = Date()
-                
-                // Normalize execution gate: only one command per recognition callback batch
-                if word == pendingCommand {
+                if word == self.pendingCommand {
                     return
                 }
-                
-                pendingCommand = word
-                
+
+                self.pendingCommand = word
+
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    
+
                     self.lastHeardWord = word
-                    
+
                     switch word {
                     case "stop", "pause":
                         self.onStop?()
@@ -264,12 +263,10 @@ class VoiceCommandManager: ObservableObject {
                     default:
                         break
                     }
-                    
-                    // clear gate AFTER execution cycle
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        self.pendingCommand = nil
-                    }
-                }            // end of dedupe block
+                }
+
+                // reset gate AFTER delay but NOT async execution
+                self.resetPendingCommand()
             }
 
             if error != nil {
@@ -297,6 +294,19 @@ class VoiceCommandManager: ObservableObject {
         recognitionTask = nil
         isListening = false
     }
+    
+    @MainActor
+    private func resetPendingCommand() {
+        let current = pendingCommand
+
+        Task { [current] in
+            try? await Task.sleep(nanoseconds: 400_000_000)
+
+            guard self.pendingCommand == current else { return }
+            self.pendingCommand = nil
+        }
+    }
+    
 }
 
 // MARK: - Content View
