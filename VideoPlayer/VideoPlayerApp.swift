@@ -136,9 +136,8 @@ class VoiceCommandManager: ObservableObject {
     private var recognitionTask: SFSpeechRecognitionTask?
     
     private var lastProcessedTranscript: String = ""
-    private var lastEmittedWord: String = ""
-    private var lastCommandTime: Date = .distantPast
-    private let commandCooldown: TimeInterval = 0.8
+    private var lastCommandTimestamps: [String: Date] = [:]
+    private let commandCooldown: TimeInterval = 1.0
     
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -237,13 +236,15 @@ class VoiceCommandManager: ObservableObject {
                 guard let last = words.last else { return }
                 let word = String(last)
 
-                // Avoid emitting same word repeatedly
-                guard word != self.lastEmittedWord else { return }
-                self.lastEmittedWord = word
-
                 let now = Date()
-                guard now.timeIntervalSince(self.lastCommandTime) > self.commandCooldown else { return }
-                self.lastCommandTime = now
+
+                // Suppress duplicates per word (not globally)
+                if let lastTime = self.lastCommandTimestamps[word],
+                   now.timeIntervalSince(lastTime) <= self.commandCooldown {
+                    return
+                }
+
+                self.lastCommandTimestamps[word] = now
 
                 DispatchQueue.main.async {
                     self.lastHeardWord = word
