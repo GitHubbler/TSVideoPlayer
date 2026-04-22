@@ -22,15 +22,15 @@ extension FocusedValues {
 
 @main
 struct VideoPlayerApp: App {
-    #if os(macOS)
+#if os(macOS)
     @FocusedValue(\.openVideo) var openVideo
-    #endif
-
+#endif
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
-        #if os(macOS)
+#if os(macOS)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Open Video...") {
@@ -39,7 +39,7 @@ struct VideoPlayerApp: App {
                 .keyboardShortcut("o")
             }
         }
-        #endif
+#endif
     }
 }
 
@@ -50,12 +50,12 @@ class PlayerModel: ObservableObject {
     let player = AVPlayer()
     @Published var isPlaying = false
     @Published var title = "Video Player"
-    #if os(iOS)
+#if os(iOS)
     var activeURL: URL?
-    #endif
-
+#endif
+    
     private static let lastURLKey = "LastOpenedVideoURL"
-
+    
     init() {
         NotificationCenter.default.addObserver(
             forName: .AVPlayerItemDidPlayToEndTime,
@@ -65,44 +65,45 @@ class PlayerModel: ObservableObject {
             Task { @MainActor in self?.isPlaying = false }
         }
     }
-
+    
     func play() {
         player.play()
         isPlaying = true
     }
-
+    
     func pause() {
         player.pause()
         isPlaying = false
     }
-
+    
     func togglePlayPause() {
         if isPlaying { pause() } else { play() }
     }
-
+    
     func load(url: URL) {
-        #if os(iOS)
+#if os(iOS)
         activeURL?.stopAccessingSecurityScopedResource()
         activeURL = url
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playback, mode: .default, options: .mixWithOthers)
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
-        #endif
-        UserDefaults.standard.set(url.absoluteString, forKey: Self.lastURLKey)
+#endif
+        UserDefaults.standard.set(url.path, forKey: Self.lastURLKey)
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         title = url.lastPathComponent
         play()
     }
-
+    
     func restoreLastURL() {
-        guard let savedString = UserDefaults.standard.string(forKey: Self.lastURLKey),
-              let url = URL(string: savedString) else { return }
+        guard let path = UserDefaults.standard.string(forKey: Self.lastURLKey) else { return }
+        let url = URL(fileURLWithPath: path)
+        
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
         title = url.lastPathComponent
-        play()
-//        pause() (the previous file, after auto-loading, must not be playing. Commented out to match the latest "fix" by GPT.)
+        
+        pause()
     }
-
+    
     func seek(by seconds: Double) {
         let current = player.currentTime()
         if seconds < 0 {
@@ -113,13 +114,12 @@ class PlayerModel: ObservableObject {
             player.seek(to: target)
         }
     }
-
-    #if os(iOS)
+#if os(iOS)
     func releaseURL() {
         activeURL?.stopAccessingSecurityScopedResource()
         activeURL = nil
     }
-    #endif
+#endif
 }
 
 // MARK: - Voice Command Manager
@@ -129,21 +129,24 @@ class VoiceCommandManager: ObservableObject {
     @Published var isListening = false
     @Published var lastHeardWord = ""
     @Published var showSettingsAlert = false
-
+    
     private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
-    private var lastProcessedWordCount = 0 // brittle because speech engines revise transcripts.
-    private var lastCommand: String? // more reliable
-
+    
+    private var lastProcessedTranscript: String = ""
+    private var lastEmittedWord: String = ""
+    private var lastCommandTime: Date = .distantPast
+    private let commandCooldown: TimeInterval = 0.8
+    
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
     var onBack: (() -> Void)?
     var onSkip: (() -> Void)?
-
+    
     func requestPermissionsAndStart() {
-        #if os(iOS)
+#if os(iOS)
         let micStatus = AVAudioApplication.shared.recordPermission
         switch micStatus {
         case .undetermined:
@@ -163,7 +166,7 @@ class VoiceCommandManager: ObservableObject {
         @unknown default:
             requestSpeechAndStart()
         }
-        #else
+#else
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             DispatchQueue.main.async {
                 if status == .authorized {
@@ -171,10 +174,9 @@ class VoiceCommandManager: ObservableObject {
                 }
             }
         }
-        #endif
+#endif
     }
-
-    #if os(iOS)
+#if os(iOS)
     private func requestSpeechAndStart() {
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
             DispatchQueue.main.async {
@@ -186,79 +188,75 @@ class VoiceCommandManager: ObservableObject {
             }
         }
     }
-    #endif
-
+#endif
+    
     func startListening() {
         guard let speechRecognizer, speechRecognizer.isAvailable else { return }
         stopListening()
 
-        #if os(iOS)
+#if os(iOS)
         let audioSession = AVAudioSession.sharedInstance()
-        do {
-            try audioSession.setCategory(.playAndRecord, mode: .default,
-                                        options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
-            return
-        }
-        #endif
+        try? audioSession.setCategory(.playAndRecord, mode: .default,
+                                     options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
+        try? audioSession.setActive(true, options: .notifyOthersOnDeactivation)
+#endif
 
         let request = SFSpeechAudioBufferRecognitionRequest()
+        // Reset state for a fresh session
+        self.lastProcessedTranscript = ""
         request.shouldReportPartialResults = true
         request.addsPunctuation = false
         if speechRecognizer.supportsOnDeviceRecognition {
             request.requiresOnDeviceRecognition = true
         }
-        recognitionRequest = request
-        lastProcessedWordCount = 0
+        self.recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
-        let hwFormat = inputNode.outputFormat(forBus: 0)
-        let recordingFormat: AVAudioFormat
-        if hwFormat.sampleRate > 0 && hwFormat.channelCount > 0 {
-            recordingFormat = hwFormat
-        } else {
-            guard let fallback = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 1) else { return }
-            recordingFormat = fallback
+        let inputFormat = inputNode.inputFormat(forBus: 0)
+        inputNode.removeTap(onBus: 0)
+
+        // Verify input node is available
+        guard inputFormat.channelCount > 0 else {
+            print("No audio input available")
+            return
         }
-        
-        inputNode.removeTap(onBus: 0)  // Even if you think it’s clean—AVAudioEngine is unforgiving here.
-        
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            request.append(buffer)
+
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+            self?.recognitionRequest?.append(buffer)
         }
 
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
+
             if let result {
+                print("Got recognition result")
                 let text = result.bestTranscription.formattedString.lowercased()
+                print("TEXT:", text)
+
                 let words = text.split(separator: " ")
-                if words.count > self.lastProcessedWordCount {
-                    let newWords = words[self.lastProcessedWordCount...]
-                    self.lastProcessedWordCount = words.count
-                            
-                    if let last = newWords.last {
-                        let word = String(last)
-                        
-                        // dedupe
-                        guard word != lastCommand else { return }
-                        lastCommand = word
-                        
-                        DispatchQueue.main.async {
-                            self.lastHeardWord = word
-                            switch word {
-                            case "stop", "pause": self.onStop?()
-                            case "play", "start": self.onPlay?()
-                            case "back":           self.onBack?()
-                            case "skip":           self.onSkip?()
-                            default: break
-                            }
-                        }
+                guard let last = words.last else { return }
+                let word = String(last)
+
+                // Avoid emitting same word repeatedly
+                guard word != self.lastEmittedWord else { return }
+                self.lastEmittedWord = word
+
+                let now = Date()
+                guard now.timeIntervalSince(self.lastCommandTime) > self.commandCooldown else { return }
+                self.lastCommandTime = now
+
+                DispatchQueue.main.async {
+                    self.lastHeardWord = word
+                    switch word {
+                    case "stop", "pause": self.onStop?()
+                    case "play", "start": self.onPlay?()
+                    case "back": self.onBack?()
+                    case "skip": self.onSkip?()
+                    default: break
                     }
                 }
             }
-            
-            //            if error != nil || result?.isFinal == true { // was tearing down and recreating the recognition pipeline every time a result is marked .isFinal.
+
             if error != nil {
                 DispatchQueue.main.async {
                     self.stopListening()
@@ -269,28 +267,20 @@ class VoiceCommandManager: ObservableObject {
             }
         }
 
-        do {
-            audioEngine.prepare()
-            try audioEngine.start()
-            isListening = true
-        } catch {
-            stopListening()
-        }
+        audioEngine.prepare()
+        try? audioEngine.start()
+        print("Audio engine started: \(self.audioEngine.isRunning)")
+        isListening = true
     }
-
+    
     func stopListening() {
         audioEngine.inputNode.removeTap(onBus: 0)
         audioEngine.stop()
         recognitionRequest?.endAudio()
-        recognitionRequest = nil
         recognitionTask?.cancel()
+        recognitionRequest = nil
         recognitionTask = nil
         isListening = false
-        #if os(iOS)
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, mode: .default, options: .mixWithOthers)
-        try? session.setActive(true, options: .notifyOthersOnDeactivation)
-        #endif
     }
 }
 
@@ -299,97 +289,56 @@ class VoiceCommandManager: ObservableObject {
 struct ContentView: View {
     @StateObject private var model = PlayerModel()
     @StateObject private var voiceManager = VoiceCommandManager()
-    #if os(iOS)
+#if os(iOS)
     @State private var showFilePicker = false
-    #endif
-
+#endif
+#if os(macOS)
+    private func openVideo() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie, .video]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        if panel.runModal() == .OK, let url = panel.url {
+            model.load(url: url)
+        }
+    }
+#endif
+    
     var body: some View {
-        VStack(spacing: 0) {
+        VStack {
             PlayerView(player: model.player)
                 .background(Color.black)
-
+            
             HStack {
                 Button(action: toggleVoiceControl) {
                     Image(systemName: voiceManager.isListening ? "mic.fill" : "mic.slash")
-                        .frame(minWidth: 44, minHeight: 44)
                 }
-                .contentShape(Rectangle())
-                #if os(macOS)
-                .help(voiceManager.isListening ? "Voice control active" : "Enable voice control")
-                #endif
-
-                if voiceManager.isListening && !voiceManager.lastHeardWord.isEmpty {
+                
+                if voiceManager.isListening {
                     Text(voiceManager.lastHeardWord)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
-
+                
                 Spacer()
-
-                #if os(iOS)
-                Button(action: { showFilePicker = true }) {
-                    Image(systemName: "folder")
-                        .font(.title2)
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .contentShape(Rectangle())
-                #endif
-
+                
                 Button(action: model.togglePlayPause) {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
-                        .font(.title2)
-                        .frame(minWidth: 44, minHeight: 44)
-                }
-                .contentShape(Rectangle())
-                #if os(macOS)
-                .keyboardShortcut(.space, modifiers: [])
-                #endif
-
-                Spacer()
-
-                Color.clear
-                    .frame(width: 44, height: 44)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-        }
-        #if os(macOS)
-        .frame(minWidth: 480, minHeight: 360)
-        .focusedSceneValue(\.openVideo, openFile)
-        #endif
-        .navigationTitle(model.title)
-        #if os(iOS)
-        .fileImporter(isPresented: $showFilePicker,
-                      allowedContentTypes: [.mpeg4Movie, .quickTimeMovie, .movie]) { result in
-            if case .success(let url) = result {
-                guard url.startAccessingSecurityScopedResource() else { return }
-                model.load(url: url)
-            }
-        }
-        .alert("Microphone Access Required",
-               isPresented: $voiceManager.showSettingsAlert) {
-            Button("Open Settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
                 }
             }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Voice control needs microphone and speech recognition access. Please enable both in Settings > Privacy.")
+            .padding()
         }
-        .onDisappear {
-            model.releaseURL()
-        }
-        #endif
         .onAppear {
-            voiceManager.onPlay  = { [weak model] in model?.play() }
-            voiceManager.onStop  = { [weak model] in model?.pause() }
-            voiceManager.onBack  = { [weak model] in model?.seek(by: -15) }
-            voiceManager.onSkip  = { [weak model] in model?.seek(by:  15) }
+            voiceManager.onPlay = { model.play() }
+            voiceManager.onStop = { model.pause() }
+            voiceManager.onBack = { model.seek(by: -15) }
+            voiceManager.onSkip = { model.seek(by: 15) }
             model.restoreLastURL()
         }
+#if os(macOS)
+        .focusedSceneValue(\.openVideo, openVideo)
+#endif
     }
-
+    
     private func toggleVoiceControl() {
         if voiceManager.isListening {
             voiceManager.stopListening()
@@ -397,18 +346,6 @@ struct ContentView: View {
             voiceManager.requestPermissionsAndStart()
         }
     }
-
-    #if os(macOS)
-    private func openFile() {
-        let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.mpeg4Movie, .quickTimeMovie, .movie]
-        panel.allowsMultipleSelection = false
-        panel.canChooseDirectories = false
-        if panel.runModal() == .OK, let url = panel.url {
-            model.load(url: url)
-        }
-    }
-    #endif
 }
 
 // MARK: - Player View
@@ -416,78 +353,30 @@ struct ContentView: View {
 #if os(macOS)
 struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
-
-    func makeNSView(context: Context) -> PlayerNSView {
-        let view = PlayerNSView()
-        view.player = player
+    
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        let layer = AVPlayerLayer(player: player)
+        layer.frame = view.bounds
+        view.layer = layer
+        view.wantsLayer = true
         return view
     }
-
-    func updateNSView(_ nsView: PlayerNSView, context: Context) {
-        nsView.player = player
-    }
-
-    class PlayerNSView: NSView {
-        private let playerLayer = AVPlayerLayer()
-
-        override init(frame frameRect: NSRect) {
-            super.init(frame: frameRect)
-            wantsLayer = true
-            layer?.addSublayer(playerLayer)
-            playerLayer.videoGravity = .resizeAspect
-        }
-
-        required init?(coder: NSCoder) {
-            fatalError()
-        }
-
-        var player: AVPlayer? {
-            get { playerLayer.player }
-            set { playerLayer.player = newValue }
-        }
-
-        override func layout() {
-            super.layout()
-            playerLayer.frame = bounds
-        }
-    }
+    
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 #else
 struct PlayerView: UIViewRepresentable {
     let player: AVPlayer
-
-    func makeUIView(context: Context) -> PlayerUIView {
-        let view = PlayerUIView()
-        view.player = player
+    
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        let layer = AVPlayerLayer(player: player)
+        layer.frame = view.bounds
+        view.layer.addSublayer(layer)
         return view
     }
-
-    func updateUIView(_ uiView: PlayerUIView, context: Context) {
-        uiView.player = player
-    }
-
-    class PlayerUIView: UIView {
-        private let playerLayer = AVPlayerLayer()
-
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            layer.addSublayer(playerLayer)
-            playerLayer.videoGravity = .resizeAspect
-        }
-
-        required init?(coder: NSCoder) {
-            fatalError()
-        }
-
-        var player: AVPlayer? {
-            get { playerLayer.player }
-            set { playerLayer.player = newValue }
-        }
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            playerLayer.frame = bounds
-        }
-    }
+    
+    func updateUIView(_ uiView: UIView, context: Context) {}
 }
 #endif
