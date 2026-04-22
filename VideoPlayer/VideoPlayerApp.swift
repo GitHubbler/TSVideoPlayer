@@ -138,9 +138,9 @@ class VoiceCommandManager: ObservableObject {
     private var lastProcessedTranscript: String = ""
     private var lastCommandTimestamps: [String: Date] = [:]
     
-    private var lastExecutedCommand: String = ""
-    private var lastExecutionTime: Date = .distantPast
-    private let commandCooldown: TimeInterval = 0.8
+    private var pendingWord: String?
+    private var pendingTask: Task<Void, Never>?
+    private let debounceDelay: UInt64 = 300_000_000 // 0.3s
     
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -226,51 +226,40 @@ class VoiceCommandManager: ObservableObject {
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
-
+        
+        
+        print("Input node format:", audioEngine.inputNode.inputFormat(forBus: 0))
+        print("Engine running:", audioEngine.isRunning)
+        print("Input node:", audioEngine.inputNode)
+        print("Output node:", audioEngine.outputNode)
+        
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
 
             if let result {
                 let text = result.bestTranscription.formattedString.lowercased()
                 print("TEXT:", text)
-
+                
                 let words = text.split(separator: " ")
                 guard let last = words.last else { return }
                 let word = String(last)
-
-                let now = Date()
-
-                // normalize command
-                let command = word
-
-                // HARD DEBOUNCE (global + per command)
-                guard command != self.lastExecutedCommand else { return }
-                guard now.timeIntervalSince(self.lastExecutionTime) > self.commandCooldown else { return }
-
-                self.lastExecutedCommand = command
-                self.lastExecutionTime = now
-
-                DispatchQueue.main.async { [weak self] in
+                
+                pendingWord = word
+                
+                pendingTask?.cancel()
+                
+                pendingTask = Task { [weak self] in
                     guard let self else { return }
-
-                    self.lastHeardWord = command
-
-                    switch command {
-                    case "stop", "pause":
-                        self.onStop?()
-                    case "play", "start":
-                        self.onPlay?()
-                    case "back":
-                        self.onBack?()
-                    case "skip":
-                        self.onSkip?()
-                    default:
-                        break
+                    
+                    try? await Task.sleep(nanoseconds: self.debounceDelay)
+                    
+                    guard self.pendingWord == word else { return }
+                    print("TASK:", ObjectIdentifier(recognitionTask!))
+                    print("ENGINE RUNNING:", audioEngine.isRunning)
+                    await MainActor.run {
+                        self.execute(word)
                     }
                 }
-                
-                // reset gate AFTER delay but NOT async execution
-//                self.resetPendingCommand()
             }
 
             if error != nil {
@@ -299,6 +288,24 @@ class VoiceCommandManager: ObservableObject {
         isListening = false
     }
     
+        private func execute(_ word: String) {
+            self.lastHeardWord = word
+
+            switch word {
+            case "stop", "pause":
+                self.onStop?()
+            case "play", "start":
+                self.onPlay?()
+            case "back":
+                self.onBack?()
+            case "skip":
+                self.onSkip?()
+            default:
+                break
+            }
+        }
+        
+        
 //    @MainActor
 //    private func resetPendingCommand() {
 //        let current = pendingCommand
