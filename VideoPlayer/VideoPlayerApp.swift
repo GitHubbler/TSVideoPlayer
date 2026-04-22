@@ -141,6 +141,10 @@ class VoiceCommandManager: ObservableObject {
     private var pendingWord: String?
     private var pendingTask: Task<Void, Never>?
     private let debounceDelay: UInt64 = 300_000_000 // 0.3s
+    private let commandQueue = DispatchQueue(label: "voice.command.queue")
+    private var lastExecutedWord: String = ""
+    private var lastExecutionTimestamp: Date = .distantPast
+    private let executionCooldown: TimeInterval = 0.8
     
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -238,26 +242,39 @@ class VoiceCommandManager: ObservableObject {
 
             if let result {
                 let text = result.bestTranscription.formattedString.lowercased()
-                print("TEXT:", text)
-                
+                print("TEXT:", text, "isFinal:", result.isFinal)
+
                 let words = text.split(separator: " ")
                 guard let last = words.last else { return }
                 let word = String(last)
-                
-                pendingWord = word
-                
-                pendingTask?.cancel()
-                
-                pendingTask = Task { [weak self] in
+
+                let now = Date()
+
+                // HARD EXECUTION GATE
+                print("word: ", word, "lastExecutedWord: ", lastExecutedWord)
+
+                guard word != lastExecutedWord else { return }
+                guard now.timeIntervalSince(lastExecutionTimestamp) > executionCooldown else { return }
+
+                lastExecutedWord = word
+                lastExecutionTimestamp = now
+
+                DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    
-                    try? await Task.sleep(nanoseconds: self.debounceDelay)
-                    
-                    guard self.pendingWord == word else { return }
-                    print("TASK:", ObjectIdentifier(recognitionTask!))
-                    print("ENGINE RUNNING:", audioEngine.isRunning)
-                    await MainActor.run {
-                        self.execute(word)
+
+                    self.lastHeardWord = word
+
+                    switch word {
+                    case "stop", "pause":
+                        self.onStop?()
+                    case "play", "start":
+                        self.onPlay?()
+                    case "back":
+                        self.onBack?()
+                    case "skip":
+                        self.onSkip?()
+                    default:
+                        break
                     }
                 }
             }
