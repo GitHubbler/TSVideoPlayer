@@ -138,6 +138,7 @@ class VoiceCommandManager: ObservableObject {
     private var lastProcessedTranscript: String = ""
     private var lastCommandTimestamps: [String: Date] = [:]
     private let commandCooldown: TimeInterval = 1.0
+    private var pendingCommand: String?
     
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -231,31 +232,44 @@ class VoiceCommandManager: ObservableObject {
                 print("Got recognition result")
                 let text = result.bestTranscription.formattedString.lowercased()
                 print("TEXT:", text)
-
+                
                 let words = text.split(separator: " ")
                 guard let last = words.last else { return }
                 let word = String(last)
-
+                
+                // dedupe block
                 let now = Date()
-
-                // Suppress duplicates per word (not globally)
-                if let lastTime = self.lastCommandTimestamps[word],
-                   now.timeIntervalSince(lastTime) <= self.commandCooldown {
+                
+                // Normalize execution gate: only one command per recognition callback batch
+                if word == pendingCommand {
                     return
                 }
-
-                self.lastCommandTimestamps[word] = now
-
-                DispatchQueue.main.async {
+                
+                pendingCommand = word
+                
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    
                     self.lastHeardWord = word
+                    
                     switch word {
-                    case "stop", "pause": self.onStop?()
-                    case "play", "start": self.onPlay?()
-                    case "back": self.onBack?()
-                    case "skip": self.onSkip?()
-                    default: break
+                    case "stop", "pause":
+                        self.onStop?()
+                    case "play", "start":
+                        self.onPlay?()
+                    case "back":
+                        self.onBack?()
+                    case "skip":
+                        self.onSkip?()
+                    default:
+                        break
                     }
-                }
+                    
+                    // clear gate AFTER execution cycle
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        self.pendingCommand = nil
+                    }
+                }            // end of dedupe block
             }
 
             if error != nil {
