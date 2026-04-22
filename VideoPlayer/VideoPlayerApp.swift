@@ -137,8 +137,10 @@ class VoiceCommandManager: ObservableObject {
     
     private var lastProcessedTranscript: String = ""
     private var lastCommandTimestamps: [String: Date] = [:]
-    private let commandCooldown: TimeInterval = 1.0
-    private var pendingCommand: String?
+    
+    private var lastExecutedCommand: String = ""
+    private var lastExecutionTime: Date = .distantPast
+    private let commandCooldown: TimeInterval = 0.8
     
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -236,22 +238,24 @@ class VoiceCommandManager: ObservableObject {
                 guard let last = words.last else { return }
                 let word = String(last)
 
-                // ─────────────────────────────────────────────
-                // HARD SYNCHRONOUS GATE (no async race possible)
-                // ─────────────────────────────────────────────
-                
-                if word == self.pendingCommand {
-                    return
-                }
+                let now = Date()
 
-                self.pendingCommand = word
+                // normalize command
+                let command = word
+
+                // HARD DEBOUNCE (global + per command)
+                guard command != self.lastExecutedCommand else { return }
+                guard now.timeIntervalSince(self.lastExecutionTime) > self.commandCooldown else { return }
+
+                self.lastExecutedCommand = command
+                self.lastExecutionTime = now
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
 
-                    self.lastHeardWord = word
+                    self.lastHeardWord = command
 
-                    switch word {
+                    switch command {
                     case "stop", "pause":
                         self.onStop?()
                     case "play", "start":
@@ -264,9 +268,9 @@ class VoiceCommandManager: ObservableObject {
                         break
                     }
                 }
-
+                
                 // reset gate AFTER delay but NOT async execution
-                self.resetPendingCommand()
+//                self.resetPendingCommand()
             }
 
             if error != nil {
@@ -295,17 +299,17 @@ class VoiceCommandManager: ObservableObject {
         isListening = false
     }
     
-    @MainActor
-    private func resetPendingCommand() {
-        let current = pendingCommand
-
-        Task { [current] in
-            try? await Task.sleep(nanoseconds: 400_000_000)
-
-            guard self.pendingCommand == current else { return }
-            self.pendingCommand = nil
-        }
-    }
+//    @MainActor
+//    private func resetPendingCommand() {
+//        let current = pendingCommand
+//
+//        Task { [current] in
+//            try? await Task.sleep(nanoseconds: 400_000_000)
+//
+//            guard self.pendingCommand == current else { return }
+//            self.pendingCommand = nil
+//        }
+//    }
     
 }
 
