@@ -24,6 +24,8 @@ class VoiceCommandManager: ObservableObject {
     var onStop: (() -> Void)?
     var onBack: (() -> Void)?
     var onSkip: (() -> Void)?
+    var onBegin: (() -> Void)?
+    var onEnd: (() -> Void)?
 
     func requestPermissionsAndStart() {
 #if os(iOS)
@@ -136,7 +138,9 @@ class VoiceCommandManager: ObservableObject {
                     word == "play" ||
                     word == "start" ||
                     word == "skip" ||
-                    word == "back"
+                    word == "back" ||
+                    word == "begin" ||
+                    word == "end"
                 )
 
                 guard isStateCommand else { return }
@@ -161,6 +165,10 @@ class VoiceCommandManager: ObservableObject {
                         self.onBack?()
                     case "skip":
                         self.onSkip?()
+                    case "begin":
+                        self.onBegin?()
+                    case "end":
+                        self.onEnd?()
                     default:
                         break
                     }

@@ -114,6 +114,22 @@ class PlayerModel: ObservableObject {
             player.seek(to: target)
         }
     }
+
+    func seekToBeginningAndPause() {
+        pause()
+        player.seek(to: .zero)
+    }
+
+    func seekToEndAndPause() {
+        pause()
+
+        guard let item = player.currentItem else { return }
+
+        let duration = item.duration
+        guard duration.isNumeric && duration.isValid else { return }
+
+        player.seek(to: duration)
+    }
 #if os(iOS)
     func releaseURL() {
         activeURL?.stopAccessingSecurityScopedResource()
@@ -171,6 +187,8 @@ struct ContentView: View {
             voiceManager.onStop = { model.pause() }
             voiceManager.onBack = { model.seek(by: -15) }
             voiceManager.onSkip = { model.seek(by: 15) }
+            voiceManager.onBegin = { model.seekToBeginningAndPause() }
+            voiceManager.onEnd = { model.seekToEndAndPause() }
             model.restoreLastURL()
         }
 #if os(macOS)
