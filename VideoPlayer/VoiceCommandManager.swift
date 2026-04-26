@@ -13,12 +13,17 @@ class VoiceCommandManager: ObservableObject {
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var restartWorkItem: DispatchWorkItem?
+    private var wantsListening = false
+    private var suppressErrorHandlingUntil: Date = .distantPast
+    private var audioCaptureConfigured = false
 
     // MARK: - Command control state
 
     private var lastExecutedWord: String = ""
     private var lastExecutionTime: Date = .distantPast
     private let executionCooldown: TimeInterval = 1.0   // human feedback loop
+    private let commandRearmDelay: TimeInterval = 0.15
 
     var onPlay: (() -> Void)?
     var onStop: (() -> Void)?
@@ -28,6 +33,7 @@ class VoiceCommandManager: ObservableObject {
     var onEnd: (() -> Void)?
 
     func requestPermissionsAndStart() {
+        wantsListening = true
 #if os(iOS)
         let micStatus = AVAudioApplication.shared.recordPermission
         switch micStatus {
@@ -74,9 +80,20 @@ class VoiceCommandManager: ObservableObject {
 #endif
 
     func startListening() {
+        wantsListening = true
         guard let speechRecognizer, speechRecognizer.isAvailable else { return }
 
-        stopListening()
+        restartWorkItem?.cancel()
+        startAudioCaptureIfNeeded()
+        guard audioCaptureConfigured else { return }
+        startRecognitionTask()
+    }
+
+    private func startAudioCaptureIfNeeded() {
+        guard !audioCaptureConfigured else {
+            isListening = true
+            return
+        }
 
 #if os(iOS)
         let session = AVAudioSession.sharedInstance()
@@ -85,16 +102,6 @@ class VoiceCommandManager: ObservableObject {
                                  options: [.defaultToSpeaker, .allowBluetoothA2DP, .mixWithOthers])
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
 #endif
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.addsPunctuation = false
-
-        if speechRecognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
-        }
-
-        recognitionRequest = request
 
         let inputNode = audioEngine.inputNode
         let inputFormat = inputNode.inputFormat(forBus: 0)
@@ -110,14 +117,37 @@ class VoiceCommandManager: ObservableObject {
             self?.recognitionRequest?.append(buffer)
         }
 
+        audioEngine.prepare()
+        try? audioEngine.start()
+
+        print("Audio engine started: \(audioEngine.isRunning)")
+        audioCaptureConfigured = true
+        isListening = true
+    }
+
+    private func startRecognitionTask() {
+        guard recognitionTask == nil,
+              let speechRecognizer,
+              speechRecognizer.isAvailable else { return }
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.addsPunctuation = false
+
+        if speechRecognizer.supportsOnDeviceRecognition {
+            request.requiresOnDeviceRecognition = true
+        }
+
+        recognitionRequest = request
+
         recognitionTask = speechRecognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
 
             if let result {
-                let text = result.bestTranscription.formattedString.lowercased()
-                let words = text.split(separator: " ")
-                guard let last = words.last else { return }
-                let word = String(last)
+                guard let segment = result.bestTranscription.segments.last else { return }
+                let word = segment.substring
+                    .lowercased()
+                    .trimmingCharacters(in: .punctuationCharacters)
 
                 // -------------------------
                 // LIVE UI UPDATE (always)
@@ -173,33 +203,69 @@ class VoiceCommandManager: ObservableObject {
                         break
                     }
                 }
+
+                self.rearmRecognitionForNextCommand()
             }
 
             if error != nil {
-                self.stopListening()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    self.startListening()
+                let now = Date()
+                if now < self.suppressErrorHandlingUntil {
+                    return
+                }
+
+                self.stopRecognitionTask()
+                guard self.wantsListening else { return }
+
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self, self.wantsListening else { return }
+                    self.startRecognitionTask()
                 }
             }
         }
-
-        audioEngine.prepare()
-        try? audioEngine.start()
-
-        print("Audio engine started: \(audioEngine.isRunning)")
-        isListening = true
     }
 
     func stopListening() {
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
+        wantsListening = false
+        restartWorkItem?.cancel()
+        restartWorkItem = nil
+        suppressErrorHandlingUntil = Date().addingTimeInterval(1.0)
+        lastExecutedWord = ""
+        lastExecutionTime = .distantPast
+        stopRecognitionTask()
+        stopAudioCapture()
+    }
 
+    private func rearmRecognitionForNextCommand() {
+        guard wantsListening else { return }
+
+        restartWorkItem?.cancel()
+        suppressErrorHandlingUntil = Date().addingTimeInterval(1.0)
+        stopRecognitionTask()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self, self.wantsListening else { return }
+            self.startRecognitionTask()
+        }
+
+        restartWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + commandRearmDelay, execute: workItem)
+    }
+
+    private func stopRecognitionTask() {
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
 
         recognitionRequest = nil
         recognitionTask = nil
+    }
 
+    private func stopAudioCapture() {
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.stop()
+        audioCaptureConfigured = false
+#if os(iOS)
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+#endif
         isListening = false
     }
 }
