@@ -50,6 +50,8 @@ class PlayerModel: ObservableObject {
     let player = AVPlayer()
     @Published var isPlaying = false
     @Published var title = "Video Player"
+    @Published var playbackRate: Float = 1.0
+    @Published var volumeLevel: Float = 1.0
 #if os(iOS)
     var activeURL: URL?
 #endif
@@ -67,7 +69,7 @@ class PlayerModel: ObservableObject {
     }
     
     func play() {
-        player.play()
+        player.playImmediately(atRate: playbackRate)
         isPlaying = true
     }
     
@@ -90,6 +92,7 @@ class PlayerModel: ObservableObject {
 #endif
         UserDefaults.standard.set(url.path, forKey: Self.lastURLKey)
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        player.volume = volumeLevel
         title = url.lastPathComponent
         play()
     }
@@ -99,6 +102,7 @@ class PlayerModel: ObservableObject {
         let url = URL(fileURLWithPath: path)
         
         player.replaceCurrentItem(with: AVPlayerItem(url: url))
+        player.volume = volumeLevel
         title = url.lastPathComponent
         
         pause()
@@ -129,6 +133,18 @@ class PlayerModel: ObservableObject {
         guard duration.isNumeric && duration.isValid else { return }
 
         player.seek(to: duration)
+    }
+
+    func adjustPlaybackRate(by delta: Float) {
+        playbackRate = min(max(playbackRate + delta, 0.1), 2.0)
+
+        guard isPlaying else { return }
+        player.rate = playbackRate
+    }
+
+    func adjustVolume(by delta: Float) {
+        volumeLevel = min(max(volumeLevel + delta, 0.0), 1.0)
+        player.volume = volumeLevel
     }
 #if os(iOS)
     func releaseURL() {
@@ -189,6 +205,10 @@ struct ContentView: View {
             voiceManager.onSkip = { model.seek(by: 15) }
             voiceManager.onBegin = { model.seekToBeginningAndPause() }
             voiceManager.onEnd = { model.seekToEndAndPause() }
+            voiceManager.onFast = { model.adjustPlaybackRate(by: 0.1) }
+            voiceManager.onSlow = { model.adjustPlaybackRate(by: -0.1) }
+            voiceManager.onLoud = { model.adjustVolume(by: 0.1) }
+            voiceManager.onSoft = { model.adjustVolume(by: -0.1) }
             model.restoreLastURL()
         }
 #if os(macOS)
