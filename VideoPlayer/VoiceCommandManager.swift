@@ -16,7 +16,6 @@ class VoiceCommandManager: ObservableObject {
     private var restartWorkItem: DispatchWorkItem?
     private var wantsListening = false
     private var suppressErrorHandlingUntil: Date = .distantPast
-    private var audioCaptureConfigured = false
 
     // MARK: - Command control state
 
@@ -31,6 +30,10 @@ class VoiceCommandManager: ObservableObject {
     var onSkip: (() -> Void)?
     var onBegin: (() -> Void)?
     var onEnd: (() -> Void)?
+    var onFast: (() -> Void)?
+    var onSlow: (() -> Void)?
+    var onLoud: (() -> Void)?
+    var onSoft: (() -> Void)?
 
     func requestPermissionsAndStart() {
         wantsListening = true
@@ -84,16 +87,7 @@ class VoiceCommandManager: ObservableObject {
         guard let speechRecognizer, speechRecognizer.isAvailable else { return }
 
         restartWorkItem?.cancel()
-        startAudioCaptureIfNeeded()
-        guard audioCaptureConfigured else { return }
-        startRecognitionTask()
-    }
-
-    private func startAudioCaptureIfNeeded() {
-        guard !audioCaptureConfigured else {
-            isListening = true
-            return
-        }
+        tearDownRecognitionSession()
 
 #if os(iOS)
         let session = AVAudioSession.sharedInstance()
@@ -116,19 +110,6 @@ class VoiceCommandManager: ObservableObject {
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
-
-        audioEngine.prepare()
-        try? audioEngine.start()
-
-        print("Audio engine started: \(audioEngine.isRunning)")
-        audioCaptureConfigured = true
-        isListening = true
-    }
-
-    private func startRecognitionTask() {
-        guard recognitionTask == nil,
-              let speechRecognizer,
-              speechRecognizer.isAvailable else { return }
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -170,7 +151,11 @@ class VoiceCommandManager: ObservableObject {
                     word == "skip" ||
                     word == "back" ||
                     word == "begin" ||
-                    word == "end"
+                    word == "end" ||
+                    word == "fast" ||
+                    word == "slow" ||
+                    word == "loud" ||
+                    word == "soft"
                 )
 
                 guard isStateCommand else { return }
@@ -199,6 +184,14 @@ class VoiceCommandManager: ObservableObject {
                         self.onBegin?()
                     case "end":
                         self.onEnd?()
+                    case "fast":
+                        self.onFast?()
+                    case "slow":
+                        self.onSlow?()
+                    case "loud":
+                        self.onLoud?()
+                    case "soft":
+                        self.onSoft?()
                     default:
                         break
                     }
@@ -213,15 +206,21 @@ class VoiceCommandManager: ObservableObject {
                     return
                 }
 
-                self.stopRecognitionTask()
+                self.tearDownRecognitionSession()
                 guard self.wantsListening else { return }
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                     guard let self, self.wantsListening else { return }
-                    self.startRecognitionTask()
+                    self.startListening()
                 }
             }
         }
+
+        audioEngine.prepare()
+        try? audioEngine.start()
+
+        print("Audio engine started: \(audioEngine.isRunning)")
+        isListening = true
     }
 
     func stopListening() {
@@ -231,8 +230,7 @@ class VoiceCommandManager: ObservableObject {
         suppressErrorHandlingUntil = Date().addingTimeInterval(1.0)
         lastExecutedWord = ""
         lastExecutionTime = .distantPast
-        stopRecognitionTask()
-        stopAudioCapture()
+        tearDownRecognitionSession()
     }
 
     private func rearmRecognitionForNextCommand() {
@@ -240,32 +238,26 @@ class VoiceCommandManager: ObservableObject {
 
         restartWorkItem?.cancel()
         suppressErrorHandlingUntil = Date().addingTimeInterval(1.0)
-        stopRecognitionTask()
+        tearDownRecognitionSession()
 
         let workItem = DispatchWorkItem { [weak self] in
             guard let self, self.wantsListening else { return }
-            self.startRecognitionTask()
+            self.startListening()
         }
 
         restartWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + commandRearmDelay, execute: workItem)
     }
 
-    private func stopRecognitionTask() {
+    private func tearDownRecognitionSession() {
+        audioEngine.inputNode.removeTap(onBus: 0)
+        audioEngine.stop()
+
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
 
         recognitionRequest = nil
         recognitionTask = nil
-    }
-
-    private func stopAudioCapture() {
-        audioEngine.inputNode.removeTap(onBus: 0)
-        audioEngine.stop()
-        audioCaptureConfigured = false
-#if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-#endif
         isListening = false
     }
 }
