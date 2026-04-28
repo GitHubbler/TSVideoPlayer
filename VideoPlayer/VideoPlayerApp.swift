@@ -189,6 +189,17 @@ struct ContentView: View {
                 if voiceManager.isListening {
                     Text(voiceManager.lastHeardWord)
                 }
+
+                HStack(spacing: 12) {
+                    statusChip(
+                        systemImage: "gauge.with.dots.needle.33percent",
+                        text: String(format: "%.1fx", model.playbackRate)
+                    )
+                    statusChip(
+                        systemImage: "speaker.wave.2.fill",
+                        text: String(format: "%.1f", model.volumeLevel)
+                    )
+                }
                 
                 Spacer()
                 
@@ -222,6 +233,19 @@ struct ContentView: View {
         } else {
             voiceManager.requestPermissionsAndStart()
         }
+    }
+
+    @ViewBuilder
+    private func statusChip(systemImage: String, text: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: systemImage)
+            Text(text)
+                .monospacedDigit()
+        }
+        .font(.caption)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.thinMaterial, in: Capsule())
     }
 }
 

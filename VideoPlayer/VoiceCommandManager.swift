@@ -14,6 +14,7 @@ class VoiceCommandManager: ObservableObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var restartWorkItem: DispatchWorkItem?
+    private var clearLastHeardWordWorkItem: DispatchWorkItem?
     private var wantsListening = false
     private var suppressErrorHandlingUntil: Date = .distantPast
 
@@ -167,6 +168,7 @@ class VoiceCommandManager: ObservableObject {
 
                 self.lastExecutedWord = word
                 self.lastExecutionTime = now
+                self.scheduleLastHeardWordClear()
 
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
@@ -227,9 +229,12 @@ class VoiceCommandManager: ObservableObject {
         wantsListening = false
         restartWorkItem?.cancel()
         restartWorkItem = nil
+        clearLastHeardWordWorkItem?.cancel()
+        clearLastHeardWordWorkItem = nil
         suppressErrorHandlingUntil = Date().addingTimeInterval(1.0)
         lastExecutedWord = ""
         lastExecutionTime = .distantPast
+        lastHeardWord = ""
         tearDownRecognitionSession()
     }
 
@@ -247,6 +252,18 @@ class VoiceCommandManager: ObservableObject {
 
         restartWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + commandRearmDelay, execute: workItem)
+    }
+
+    private func scheduleLastHeardWordClear() {
+        clearLastHeardWordWorkItem?.cancel()
+
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.lastHeardWord = ""
+        }
+
+        clearLastHeardWordWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + executionCooldown, execute: workItem)
     }
 
     private func tearDownRecognitionSession() {
