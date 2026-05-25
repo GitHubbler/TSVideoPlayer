@@ -88,7 +88,6 @@ class VoiceCommandManager: ObservableObject {
         guard let speechRecognizer, speechRecognizer.isAvailable else { return }
 
         restartWorkItem?.cancel()
-        tearDownRecognitionSession()
 
 #if os(iOS)
         let session = AVAudioSession.sharedInstance()
